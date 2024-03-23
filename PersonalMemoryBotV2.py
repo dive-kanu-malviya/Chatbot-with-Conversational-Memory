@@ -191,7 +191,7 @@ if uploaded_file:
                 st.session_state.messages = []
                 st.empty()
             else:
-                st.error(f"An error occurred: {e}")
+                st.error("Invalid API key. Please enter a valid OpenAI API key.")
         except Exception as e:
             st.error(f"An error occurred: {e}")
     else:
