@@ -22,6 +22,14 @@ from pypdf import PdfReader
 import os
 from langchain_community.chat_models import ChatOpenAI
 
+# Initialize Streamlit page configuration
+st.set_page_config(
+    page_title="Personalized Bot with Memory 🧠",
+    page_icon="🤖",
+    layout="wide"
+)
+
+# Initialize PromptTemplate and memory
 prompt = PromptTemplate(
     input_variables=["chat_history", "question"],
     template="""You are a very kind and friendly AI assistant. You are
@@ -35,83 +43,29 @@ prompt = PromptTemplate(
 
 memory = ConversationBufferMemory()
 
-st.set_page_config(
-    page_title="Personalized Bot with Memory 🧠",
-    page_icon="🤖",
-    layout="wide"
-)
-
 # Define a function to parse a PDF file and extract its text content
 @st.cache_data
-def parse_pdf(file: BytesIO) -> List[str]:
+def parse_pdf(file: BytesIO) -> str:
     pdf = PdfReader(file)
-    output = []
+    text = ""
     for page in pdf.pages:
-        text = page.extract_text()
-        # Merge hyphenated words
-        text = re.sub(r"(\w+)-\n(\w+)", r"\1\2", text)
-        # Fix newlines in the middle of sentences
-        text = re.sub(r"(?<!\n\s)\n(?!\s\n)", " ", text.strip())
-        # Remove multiple newlines
-        text = re.sub(r"\n\s*\n", "\n\n", text)
-        output.append(text)
-    return output
-
+        text += page.extract_text()
+    return text
 
 # Define a function to convert text content to a list of documents
 @st.cache_data
 def text_to_docs(text: str) -> List[Document]:
-    """Converts a string or list of strings to a list of Documents
-    with metadata."""
-    if isinstance(text, str):
-        # Take a single string as one page
-        text = [text]
-    page_docs = [Document(page_content=page) for page in text]
+    doc = Document(page_content=text)
+    return [doc]
 
-    # Add page numbers as metadata
-    for i, doc in enumerate(page_docs):
-        doc.metadata["page"] = i + 1
-
-    # Split pages into chunks
-    doc_chunks = []
-
-    for doc in page_docs:
-        text_splitter = RecursiveCharacterTextSplitter(
-            chunk_size=2000,
-            separators=["\n\n", "\n", ".", "!", "?", ",", " ", ""],
-            chunk_overlap=0,
-        )
-        chunks = text_splitter.split_text(doc.page_content)
-        for i, chunk in enumerate(chunks):
-            doc = Document(
-                page_content=chunk, metadata={"page": doc.metadata["page"], "chunk": i}
-            )
-            # Add sources a metadata
-            doc.metadata["source"] = f"{doc.metadata['page']}-{doc.metadata['chunk']}"
-            doc_chunks.append(doc)
-    return doc_chunks
-
-st.title("Personalized Bot with Memory 🧠")
-# Allow the user to upload a PDF file
-uploaded_file = st.file_uploader("**Upload Your PDF File**", type=["pdf"])
-# Remove the @st.cache_data decorator from test_embed()
-def test_embed():
-    embeddings = OpenAIEmbeddings(openai_api_key=api)
-    # Indexing
-    # Save in a Vector DB
-    with st.spinner("It's indexing..."):
-        index = FAISS.from_documents(pages, embeddings)
-    st.success("Embeddings done.", icon="✅")
-    return index
-
+# Define a function to display chat messages
 def display_chat_messages():
     for message in st.session_state.messages:
         with st.chat_message(message["role"]):
             st.write(message["content"])
 
-
-def display_conversation_and_get_input():
-
+# Define a function to display conversation and get user input
+def display_conversation_and_get_input(index):
     user_prompt = st.chat_input()
 
     if user_prompt is not None:
@@ -132,17 +86,15 @@ def display_conversation_and_get_input():
                         if not uploaded_file:
                             ai_response = "Please upload a document first before asking a question."
                         else:
-                            # Check if the question is related to the uploaded PDF content
-                            related_to_pdf = False
-                            for doc in pages:
-                                if any(keyword in user_prompt.lower() for keyword in doc.page_content.lower().split()):
-                                    related_to_pdf = True
-                                    break
+                            # Use the indexed documents to find relevant information
+                            qa_chain = load_qa_chain(
+                                ChatOpenAI(temperature=0, openai_api_key=api, model_name="gpt-3.5-turbo"),
+                                chain_type="stuff",
+                                #retriever=index.as_retriever(),
+                                #return_source_documents=False,  # Set to False to avoid multiple output keys
+                            )
+                            ai_response = qa_chain.run(input_documents=doc,question=user_prompt, chat_history=chat_history)
 
-                            if related_to_pdf:
-                                ai_response = llm_chain.predict(question=user_prompt, chat_history=chat_history)
-                            else:
-                                ai_response = "I'm sorry, but I don't have any information to answer that question as it is unrelated to the content of the uploaded PDF file."
                     except openai.OpenAIError as e:
                         st.error(f"An error occurred: {e}")
                     else:
@@ -151,38 +103,37 @@ def display_conversation_and_get_input():
                         new_ai_message = {"role": "assistant", "content": ai_response}
                         st.session_state.messages.append(new_ai_message)
 
-
+# Main code starts here
+st.title("Personalized Bot with Memory 🧠")
+uploaded_file = st.file_uploader("**Upload Your PDF File**", type=["pdf"])
 
 if uploaded_file:
-    name_of_file = uploaded_file.name
-    doc = parse_pdf(uploaded_file)
-    pages = text_to_docs(doc)
+    # Parse uploaded PDF file and extract text content
+    text_content = parse_pdf(uploaded_file)
+    
+    # Convert text content to a list of documents
+    doc = text_to_docs(text_content)
+    
+    # Display OpenAI API key input field
     api = st.text_input(
         "**Enter OpenAI API Key**",
         type="password",
         placeholder="sk-",
         help="https://platform.openai.com/account/api-keys",
     )
+    
     if api:
-        
         try:
             # Create the vectorstore index
             embeddings = OpenAIEmbeddings(openai_api_key=api)
             with st.spinner("It's indexing..."):
-                index = FAISS.from_documents(pages, embeddings)
+                index = FAISS.from_documents(doc, embeddings)
             st.success("Embeddings done.", icon="✅")
 
-            # Add the provided model
-            llm_chain = LLMChain(
-                llm=ChatOpenAI(temperature=0, openai_api_key=api, model_name="gpt-3.5-turbo"),
-                prompt=prompt,
-            )
-            
-            
             display_chat_messages()
 
             # Display the conversation and allow user input
-            display_conversation_and_get_input()
+            display_conversation_and_get_input(index)
 
         except openai.OpenAIError as e:
             if "authentication" in str(e).lower():
