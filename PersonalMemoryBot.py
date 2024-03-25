@@ -19,7 +19,11 @@ from pypdf import PdfReader
 from langchain_community.chat_models import ChatOpenAI
 
 memory = ConversationBufferMemory()
+if 'index' not in st.session_state:
+    st.session_state.index = None
 
+if 'messages' not in st.session_state:
+    st.session_state.messages = []
 
 # Define a function to parse a PDF file and extract its text content
 @st.cache_data
@@ -73,11 +77,6 @@ def text_to_docs(text: str) -> List[Document]:
 
 
 # Define a function for the embeddings
-# @st.cache_data
-if 'index' not in st.session_state:
-    st.session_state.index = None
-
-
 def create_or_load_index(pages, api):
     if st.session_state.index is None:
         embeddings = OpenAIEmbeddings(openai_api_key=api)
